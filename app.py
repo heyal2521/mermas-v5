@@ -16,7 +16,12 @@ HTML = """
   <form action="/generate" method="post" enctype="multipart/form-data">
     <label>Fichero MERMAS (xlsx): <input type="file" name="mermas" accept=".xls,.xlsx,.xlsm" required></label><br><br>
     <button type="submit">Generar Excel</button>
-  </form>
+    </form>
+    
+    <br><br>
+<form action="/historico" method="get">
+  <button type="submit">Generar histórico</button>
+</form>
   <p style="color:gray;font-size:0.9em">Si necesitas subir tus propias plantillas, contacta para activar la opción.</p>
 </body>
 </html>
