@@ -28,7 +28,6 @@ HTML = """
     
     <br><br>
 <form action="/historico" method="get">
-  <button type="submit">Generar histórico</button>
 </form>
   <p style="color:gray;font-size:0.9em">Si necesitas subir tus propias plantillas, contacta para activar la opción.</p>
 </body>
