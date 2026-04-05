@@ -133,7 +133,6 @@ def convert_pct_cell_to_number(cell):
 @app.route('/', methods=['GET'])
 def index():
     return render_template_string(HTML)
-
 @app.route('/historico', methods=['POST'])
 def generar_historico():
     uploaded_files = request.files.getlist('files')
@@ -212,8 +211,7 @@ def generar_historico():
         download_name="historico.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-except Exception as e:
-    return f"Error generando histórico:  {e}", 500
+
 
 @app.route('/generate', methods=['POST'])
 def generate():
