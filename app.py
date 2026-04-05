@@ -157,6 +157,7 @@ def generar_historico():
                 if 'top' in name.lower() or 'calidad' in name.lower():
                     top_name = name
                     break
+            
             if not top_name:
                 top_name = wb.sheetnames[0]
               
@@ -170,16 +171,17 @@ def generar_historico():
                 if not mc:
                     continue
 
-            mc = str(mc).strip()
+                mc = str(mc).strip()
 
-            if mc not in data:
-                data[mc] = {"count": 0, "ciclos": []}
+                if mc not in data:
+                    data[mc] = {"count": 0, "ciclos": []}
 
-            data[mc]["count"] += 1
-            if etiqueta not in data[mc]["ciclos"]:
+                data[mc]["count"] += 1
+                
+                if etiqueta not in data[mc]["ciclos"]:
                     data[mc]["ciclos"].append(etiqueta)
 
-  except Exception:
+        except Exception:
             continue
 
     if not data:
@@ -194,21 +196,22 @@ def generar_historico():
 
     for mc, info in sorted(data.keys()):
         info =data[mc]
-      ws_out.append([
+        ws_out.append([
             mc,
             info["count"],
             ", ".join(info["ciclos"])
         ])
-            ", ".join(info["ciclos"])
-        ])
-
+           
     output = BytesIO()
     wb_out.save(output)
     output.seek(0)
 
-    return send_file(out_put, as_attachment=True,download_name="historico.xlsx",
+    return send_file(
+        output, 
+        as_attachment=True,
+        download_name="historico.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    ))
+    )
 
 @app.route('/generate', methods=['POST'])
 def generate():
