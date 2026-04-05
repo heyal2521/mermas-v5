@@ -136,10 +136,11 @@ def index():
 
 @app.route('/historico', methods=['POST'])
 def generar_historico():
-    uploaded_files = request.files.getlist('files')
+    try:
+        uploaded_files = request.files.getlist('files')
 
-    if not uploaded_files or all(f.filename == '' for f in uploaded_files):
-        return "No has subido ficheros para el histórico", 400
+        if not uploaded_files or all((not f or f.filename == '') for f in uploaded_files):
+            return "No has subido ficheros para el histórico", 400
 
     data = {}
 
@@ -147,59 +148,49 @@ def generar_historico():
         if not f.filename.lower().endswith(('.xlsx', '.xlsm', '.xls')):
             continue
           
-        try:
-            file_bytes = BytesIO(f.read())
-            wb = load_workbook(file_bytes, data_only=True)
+        file_bytes = BytesIO(f.read())
+        wb = load_workbook(file_bytes, data_only=True)
 
-            top_name = None
-            for name in wb.sheetnames:
+        top_name = None
+        for name in wb.sheetnames:
                 if 'top' in name.lower() or 'calidad' in name.lower():
                     top_name = name
                     break
-            
-            if not top_name:
-                top_name = wb.sheetnames[0]
+        if not top_name:
+            top_name = wb.sheetnames[0]
               
-            ws = wb[top_name]
+        ws = wb[top_name]
 
-            sem, cic = extract_sem_ciclo_from_name(f.filename)
-            etiqueta = f"SEM {sem} C{cic}" if sem or cic else f.filename
+        sem, cic = extract_sem_ciclo_from_name(f.filename)
+        etiqueta = f"SEM {sem} C{cic}" if sem or cic else f.filename
 
-            for r in range(2, ws.max_row + 1):
+        for r in range(2, ws.max_row + 1):
                 mc = ws.cell(row=r, column=1).value
-                if not mc:
+                if mc is none:
                     continue
 
                 mc = str(mc).strip()
+                if not mc:
+                    continue
 
                 if mc not in data:
                     data[mc] = {"count": 0, "ciclos": []}
 
                 data[mc]["count"] += 1
-                
                 if etiqueta not in data[mc]["ciclos"]:
                     data[mc]["ciclos"].append(etiqueta)
 
-        except Exception:
-            continue
-
     if not data:
         return "No se han podido leer datos válidos de los ficheros subidos", 400
-            
-
+    
     wb_out = Workbook()
     ws_out = wb_out.active
     ws_out.title = "HISTORICO"
-
     ws_out.append(["MC", "Veces", "Ciclos"])
 
     for mc, info in sorted(data.keys()):
         info =data[mc]
-        ws_out.append([
-            mc,
-            info["count"],
-            ", ".join(info["ciclos"])
-        ])
+        ws_out.append([mc,info["count"],", ".join(info["ciclos"])])
            
     output = BytesIO()
     wb_out.save(output)
@@ -211,6 +202,8 @@ def generar_historico():
         download_name="historico.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+except Exception as e:
+    return f"Error generando histórico:  {e}", 500
 
 @app.route('/generate', methods=['POST'])
 def generate():
