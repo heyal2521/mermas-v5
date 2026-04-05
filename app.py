@@ -2,6 +2,7 @@ from flask import Flask, request, send_file, render_template_string, redirect, u
 from openpyxl import load_workbook, Workbook
 from copy import copy
 import tempfile, os, re
+import shutil
 
 app = Flask(__name__)
 app.secret_key = "top5_secret_key"
@@ -178,22 +179,35 @@ def generar_historico():
 @app.route('/generate', methods=['POST'])
 def generate():
     if 'mermas' not in request.files:
-        flash('Falta fichero MERMAS'); return redirect(url_for('index'))
+        flash('Falta fichero MERMAS');
+        return redirect(url_for('index'))
+    
     m = request.files['mermas']
-    original_filename = m.filename or ''
     tmpdir = tempfile.mkdtemp()
     mer_path = os.path.join(tmpdir, 'mermas.xlsx')
-    m.save(mer_path)
+    m.save(mer_path)  
+  
     # templates bundled with app
     tpl_art = os.path.join(os.path.dirname(__file__), 'PLANTILLA Artículos.xlsx')
     tpl_chk = os.path.join(os.path.dirname(__file__), 'CHECKLIST CALIDAD DE REPARTO.xlsx')
+    
     if not os.path.exists(tpl_art) or not os.path.exists(tpl_chk):
         return "Faltan plantillas en la app. Contacta para añadirlas.", 500
     out_path = os.path.join(tmpdir, 'TOP_GENERADO.xlsx')
+    
     try:
-        generate_from_mermas(mer_path, tpl_art, tpl_chk, out_path, original_filename)
+        generate_from_mermas(mer_path, tpl_art, tpl_chk, out_path)
     except Exception as e:
         return f"Error durante generación: {e}", 500
+
+    historico_folder = os.path.join(os.path.dirname(__file__), "historico")
+    os.makedirs(historico_folder, exist_ok=True)
+
+    filename = f"TOP_{m.filename}"
+    historico_path = os.path.join(historico_folder, filename)
+
+    shutil.copy(out_path, historico_path)
+  
     return send_file(out_path, as_attachment=True, download_name='TOP_GENERADO.xlsx')
 
 def generate_from_mermas(mermas_path, tpl_art_path, tpl_chk_path, out_path, original_filename=''):
