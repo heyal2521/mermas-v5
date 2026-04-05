@@ -1,3 +1,4 @@
+from io import BytesIO
 from flask import Flask, request, send_file, render_template_string, redirect, url_for, flash
 from openpyxl import load_workbook, Workbook
 from copy import copy
@@ -18,6 +19,12 @@ HTML = """
     <label>Fichero MERMAS (xlsx): <input type="file" name="mermas" accept=".xls,.xlsx,.xlsm" required></label><br><br>
     <button type="submit">Generar Excel</button>
     </form>
+    <br><br>
+<h3>Generar histórico (sube varios TOP MERMAS)</h3>
+<form action="/historico" method="post" enctype="multipart/form-data">
+  <input type="file" name="files" multiple accept=".xlsx" required><br><br>
+  <button type="submit">Generar histórico</button>
+</form>
     
     <br><br>
 <form action="/historico" method="get">
@@ -128,27 +135,40 @@ def convert_pct_cell_to_number(cell):
 def index():
     return render_template_string(HTML)
 
-@app.route('/historico', methods=['GET'])
+@app.route('/historico', methods=['POST'])
 def generar_historico():
-    historico_folder = os.path.join(os.path.dirname(__file__), "historico")
+    uploaded_files = request.files.getlist('files')
 
-    files = [f for f in os.listdir(historico_folder) if f.endswith('.xlsx')]
-
-    if not files:
-        return "No hay ficheros en histórico", 400
+    if not uploaded_files or all(f.filename == '' for f in uploaded_files):
+        return "No has subido ficheros para el histórico", 400
 
     data = {}
 
-    for f in files:
-        path = os.path.join(historico_folder, f)
-        wb = load_workbook(path, data_only=True)
+    for f in uploaded_files:
+        if not f.filename.lower().endswith(('.xlsx', '.xlsm', '.xls')):
+            continue
+          
+        try:
+            file_bytes = BytesIO(f.read())
+            wb = load_workbook(file_bytes, data_only=True)
 
-        ws = wb["TOP-CALIDAD-2"]
+            top_name = None
+            for name in wb.sheetnames:
+                if 'top' in name.lower() or 'calidad' in name.lower():
+                    top_name = name
+                    break
+            if not top_name:
+                top_name = wb.sheetnames[0]
+              
+            ws = wb[top_name]
 
-        for r in range(2, ws.max_row + 1):
-            mc = ws.cell(row=r, column=1).value
-            if not mc:
-                continue
+            sem, cic = extract_sem_ciclo_from_name(f.filename)
+            etiqueta = f"SEM {sem} C{cic}" if sem or cic else f.filename
+
+            for r in range(2, ws.max_row + 1):
+                mc = ws.cell(row=r, column=1).value
+                if not mc:
+                    continue
 
             mc = str(mc).strip()
 
@@ -156,25 +176,39 @@ def generar_historico():
                 data[mc] = {"count": 0, "ciclos": []}
 
             data[mc]["count"] += 1
-            data[mc]["ciclos"].append(f)
+            if etiqueta not in data[mc]["ciclos"]:
+                    data[mc]["ciclos"].append(etiqueta)
+
+  except Exception:
+            continue
+
+    if not data:
+        return "No se han podido leer datos válidos de los ficheros subidos", 400
+            
 
     wb_out = Workbook()
     ws_out = wb_out.active
     ws_out.title = "HISTORICO"
 
-    ws_out.append(["MC", "Veces", "Apariciones"])
+    ws_out.append(["MC", "Veces", "Ciclos"])
 
-    for mc, info in data.items():
-        ws_out.append([
+    for mc, info in sorted(data.keys()):
+        info =data[mc]
+      ws_out.append([
             mc,
             info["count"],
             ", ".join(info["ciclos"])
         ])
+            ", ".join(info["ciclos"])
+        ])
 
-    out_path = os.path.join(historico_folder, "historico.xlsx")
-    wb_out.save(out_path)
+    output = BytesIO()
+    wb_out.save(output)
+    output.seek(0)
 
-    return send_file(out_path, as_attachment=True)
+    return send_file(out_put, as_attachment=True,download_name="historico.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    ))
 
 @app.route('/generate', methods=['POST'])
 def generate():
