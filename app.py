@@ -126,7 +126,8 @@ def convert_pct_cell_to_number(cell):
 @app.route('/', methods=['GET'])
 def index():
     return render_template_string(HTML)
-  @app.route('/historico', methods=['GET'])
+
+@app.route('/historico', methods=['GET'])
 def generar_historico():
     historico_folder = os.path.join(os.path.dirname(__file__), "historico")
 
