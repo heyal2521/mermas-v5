@@ -126,6 +126,53 @@ def convert_pct_cell_to_number(cell):
 @app.route('/', methods=['GET'])
 def index():
     return render_template_string(HTML)
+  @app.route('/historico', methods=['GET'])
+def generar_historico():
+    historico_folder = os.path.join(os.path.dirname(__file__), "historico")
+
+    files = [f for f in os.listdir(historico_folder) if f.endswith('.xlsx')]
+
+    if not files:
+        return "No hay ficheros en histórico", 400
+
+    data = {}
+
+    for f in files:
+        path = os.path.join(historico_folder, f)
+        wb = load_workbook(path, data_only=True)
+
+        ws = wb["TOP-CALIDAD-2"]
+
+        for r in range(2, ws.max_row + 1):
+            mc = ws.cell(row=r, column=1).value
+            if not mc:
+                continue
+
+            mc = str(mc).strip()
+
+            if mc not in data:
+                data[mc] = {"count": 0, "ciclos": []}
+
+            data[mc]["count"] += 1
+            data[mc]["ciclos"].append(f)
+
+    wb_out = Workbook()
+    ws_out = wb_out.active
+    ws_out.title = "HISTORICO"
+
+    ws_out.append(["MC", "Veces", "Apariciones"])
+
+    for mc, info in data.items():
+        ws_out.append([
+            mc,
+            info["count"],
+            ", ".join(info["ciclos"])
+        ])
+
+    out_path = os.path.join(historico_folder, "historico.xlsx")
+    wb_out.save(out_path)
+
+    return send_file(out_path, as_attachment=True)
 
 @app.route('/generate', methods=['POST'])
 def generate():
