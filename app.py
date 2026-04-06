@@ -33,7 +33,7 @@ HTML = '''
     h2 { color: #1F4E78; }
     h3 { color: #2E75B6; margin-top: 0; }
     .card { background: #fff; border-radius: 8px; padding: 24px 28px; margin-bottom: 24px; box-shadow: 0 1px 4px rgba(0,0,0,.1); }
-    label { display: inline-block; margin-bottom: 8px; font-size: 0.95em; }
+    label { display: inline-block; margin-bottom: 8px; font-size: 0.95em; font-weight: bold; }
     input[type=file] { display: block; margin: 8px 0 14px; }
     .btn-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
     button { padding: 9px 20px; border: none; border-radius: 5px; cursor: pointer; font-size: 0.95em; font-weight: bold; }
@@ -41,6 +41,7 @@ HTML = '''
     .btn-excel:hover { background: #165c2d; }
     .btn-pdf   { background: #C0392B; color: #fff; }
     .btn-pdf:hover   { background: #962d22; }
+    .badge { display:inline-block; background:#1F4E78; color:#fff; font-size:0.75em; padding:2px 8px; border-radius:10px; vertical-align:middle; margin-left:6px; }
     hr { border: none; border-top: 1px solid #dce3ec; margin: 8px 0 24px; }
     p.hint { color: #666; font-size: 0.88em; margin-top: 4px; }
   </style>
@@ -49,9 +50,22 @@ HTML = '''
   <h2>TOP MERMAS — Generador</h2>
 
   <div class="card">
-    <h3>Generar histórico (sube varios TOP MERMAS)</h3>
+    <h3>Generar TOP <span class="badge">PASO 1</span></h3>
+    <p class="hint">Sube el fichero MERMAS (.xlsx). La app genera una ficha por artículo con las plantillas integradas.</p>
+    <form method="post" enctype="multipart/form-data">
+      <label>Fichero MERMAS (xlsx):</label>
+      <input type="file" name="mermas" accept=".xls,.xlsx,.xlsm" required>
+      <div class="btn-row">
+        <button type="submit" class="btn-excel" formaction="/generate">⬇ Excel</button>
+        <button type="submit" class="btn-pdf"   formaction="/generate_pdf">⬇ PDF</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3>Generar histórico <span class="badge">PASO 2</span></h3>
     <p class="hint">Sube los ficheros TOP en orden cronológico. Puedes descargar el resultado como Excel o PDF.</p>
-    <form action="/historico" method="post" enctype="multipart/form-data" id="form-hist">
+    <form method="post" enctype="multipart/form-data">
       <label>Ficheros TOP MERMAS (xlsx):</label>
       <input type="file" name="files" multiple accept=".xlsx,.xlsm,.xls" required>
       <div class="btn-row">
@@ -62,9 +76,9 @@ HTML = '''
   </div>
 
   <div class="card">
-    <h3>Actualizar histórico acumulado</h3>
+    <h3>Actualizar histórico acumulado <span class="badge">PASO 3</span></h3>
     <p class="hint">Sube tu histórico acumulado anterior y añade los TOP nuevos que quieras incorporar.</p>
-    <form action="/historico_acumulado" method="post" enctype="multipart/form-data" id="form-acum">
+    <form method="post" enctype="multipart/form-data">
       <label>Histórico acumulado anterior (.xlsx):</label>
       <input type="file" name="master" accept=".xlsx" required>
       <label>Nuevos ficheros TOP a incorporar:</label>
@@ -749,6 +763,314 @@ def _render_historico_pdf(rows, total_models, new_models, repeated_models,
 
 
 # ─────────────────────────────────────────────
+#  GENERATE: leer fichero MERMAS
+# ─────────────────────────────────────────────
+
+def _parse_mermas_file(file_storage):
+    """
+    Lee el fichero MERMAS y devuelve:
+      - sem, cic  (semana y ciclo detectados)
+      - articulos: lista de dicts con los campos de cada artículo
+    """
+    file_bytes = BytesIO(file_storage.read())
+    wb = load_workbook(file_bytes, data_only=True)
+
+    # Buscar hoja relevante
+    ws_name = None
+    for name in wb.sheetnames:
+        nl = name.lower()
+        if any(k in nl for k in ['top', 'merma', 'calidad', 'reparto']):
+            ws_name = name
+            break
+    if not ws_name:
+        ws_name = wb.sheetnames[0]
+    ws = wb[ws_name]
+
+    # Detectar semana/ciclo del nombre de fichero o celdas
+    sem, cic = extract_sem_ciclo_from_name(file_storage.filename)
+    if not sem or not cic:
+        for r in range(1, 5):
+            for c in range(1, ws.max_column + 1):
+                v = str(ws.cell(row=r, column=c).value or "")
+                if not sem:
+                    m = re.search(r'sem[^\d]*(\d{1,2})', v, re.IGNORECASE)
+                    if m: sem = m.group(1)
+                if not cic:
+                    m = re.search(r'ciclo?[^\d]*(\d{1,2})', v, re.IGNORECASE)
+                    if m: cic = m.group(1)
+
+    # Detectar cabecera
+    headers = []
+    header_row = 1
+    for r in range(1, 6):
+        row_vals = [ws.cell(row=r, column=c).value for c in range(1, ws.max_column + 1)]
+        non_null = [v for v in row_vals if v is not None]
+        if len(non_null) >= 3:
+            headers = [str(v).strip().upper() if v else "" for v in row_vals]
+            header_row = r
+            break
+
+    def col_idx(keys):
+        for k in keys:
+            for i, h in enumerate(headers):
+                if k in h:
+                    return i
+        return None
+
+    i_art  = col_idx(['ARTICULO', 'ARTICLE', 'MC', 'MODELO', 'CODIGO', 'COD'])
+    i_fam  = col_idx(['FAMILIA', 'FAMILY', 'GRUPO'])
+    i_desc = col_idx(['DESCRIPCION', 'DESCRIPCIÓN', 'DESC'])
+    i_merm = col_idx(['MERMA', 'MERMAS', 'CANTIDAD'])
+    i_pct  = col_idx(['%', 'PORCENTAJE', 'PCT'])
+    i_dem  = col_idx(['DEMANDA', 'DEM'])
+    i_rep  = col_idx(['REPARTIDO', 'REP'])
+    i_pte  = col_idx(['PNTE', 'PENDIENTE'])
+    i_env  = col_idx(['ENVIADA', 'ENVIO'])
+    i_rev  = col_idx(['REVISADAS', 'ARREGLADAS', 'REVIS'])
+
+    if i_art is None:
+        i_art = 0
+
+    articulos = []
+    for r in range(header_row + 1, ws.max_row + 1):
+        art = ws.cell(row=r, column=i_art + 1).value if i_art is not None else None
+        if art is None:
+            continue
+        art = str(art).strip()
+        if not art:
+            continue
+
+        def gv(idx):
+            if idx is None: return None
+            v = ws.cell(row=r, column=idx + 1).value
+            return v
+
+        articulos.append({
+            'articulo':    art,
+            'familia':     str(gv(i_fam)  or '').strip(),
+            'descripcion': str(gv(i_desc) or '').strip(),
+            'mermas':      gv(i_merm),
+            'pct_mermas':  gv(i_pct),
+            'demanda':     gv(i_dem),
+            'repartido':   gv(i_rep),
+            'pte_repartir':gv(i_pte),
+            'enviada':     gv(i_env),
+            'revisadas':   gv(i_rev),
+        })
+
+    return sem, cic, articulos
+
+
+def _render_generate_excel(sem, cic, articulos):
+    """
+    Genera un Excel con:
+    - Hoja RESUMEN TOP con todos los artículos
+    - Una hoja por artículo clonando la estructura de PLANTILLA ARTÍCULOS
+    - Una hoja CHECKLIST por artículo clonando CHECKLIST REVISIÓN
+    """
+    # Cargar plantillas embebidas
+    tpl_main = load_workbook('/mnt/user-data/uploads/PLANTILLA_y_CHECKLIST_CALIDAD_DE_REPARTO.xlsx')
+    tpl_chk  = load_workbook('/mnt/user-data/uploads/Checklist_Revisión.xlsx')
+
+    wb_out = Workbook()
+    # Eliminar hoja por defecto
+    wb_out.remove(wb_out.active)
+
+    # ── Hoja RESUMEN ──
+    ws_res = wb_out.create_sheet("RESUMEN TOP")
+    ws_res.sheet_view.showGridLines = False
+
+    fill_title  = PatternFill("solid", fgColor="1F4E78")
+    fill_header = PatternFill("solid", fgColor="4A86E8")
+    fill_even   = PatternFill("solid", fgColor="DDEBF7")
+    fill_odd    = PatternFill("solid", fgColor="FFFFFF")
+    fill_red    = PatternFill("solid", fgColor="F4CCCC")
+    thin = Side(style="thin", color="7F7F7F")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    ws_res.merge_cells("A1:I1")
+    c = ws_res.cell(row=1, column=1, value=f"TOP MERMAS — SEM {sem or '?'}  CICLO {cic or '?'}")
+    c.font = Font(bold=True, size=14, color="FFFFFF")
+    c.fill = fill_title
+    c.alignment = Alignment(horizontal="center", vertical="center")
+    ws_res.row_dimensions[1].height = 24
+
+    res_headers = ["Artículo", "Familia", "Descripción", "Demanda", "Repartido",
+                   "Pte. Repartir", "Enviada", "Mermas", "% Mermas"]
+    for col, h in enumerate(res_headers, 1):
+        cell = ws_res.cell(row=2, column=col, value=h)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = fill_header
+        cell.border = border
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    for i, art in enumerate(articulos, start=3):
+        fill_row = fill_even if i % 2 == 0 else fill_odd
+        vals = [
+            art['articulo'], art['familia'], art['descripcion'],
+            art['demanda'], art['repartido'], art['pte_repartir'],
+            art['enviada'], art['mermas'], art['pct_mermas'],
+        ]
+        for col, v in enumerate(vals, 1):
+            cell = ws_res.cell(row=i, column=col, value=v)
+            cell.border = border
+            cell.fill = fill_row
+            cell.alignment = Alignment(horizontal="center" if col > 3 else "left", vertical="center")
+            if col == 9 and v is not None:  # % Mermas — resaltar si >0
+                try:
+                    if float(v) > 0:
+                        cell.fill = fill_red
+                except Exception:
+                    pass
+
+    col_widths = {1:16, 2:16, 3:28, 4:12, 5:12, 6:14, 7:12, 8:12, 9:12}
+    for col, w in col_widths.items():
+        ws_res.column_dimensions[get_column_letter(col)].width = w
+    ws_res.freeze_panes = "A3"
+
+    # ── Una ficha por artículo ──
+    ws_tpl   = tpl_main['PLANTILLA ARTÍCULOS']
+    ws_chk_t = tpl_chk['CHECKLIST REVISIÓN']
+
+    for art in articulos:
+        sheet_name = sanitize_sheet_name(art['articulo'])
+
+        # Clonar plantilla principal
+        ws_art = copy_sheet_exact(ws_tpl, wb_out, sheet_name)
+
+        # Rellenar campos
+        ws_art['B2'] = sem or ''   # Semana
+        ws_art['D2'] = cic or ''   # Ciclo
+        ws_art['B4'] = art['articulo']
+        ws_art['B5'] = art['familia']
+        ws_art['B7'] = art['descripcion']
+
+        # Fila 48: datos del informe
+        ws_art['A48'] = art['demanda']
+        ws_art['B48'] = art['repartido']
+        ws_art['C48'] = art['pte_repartir']
+        ws_art['D48'] = art['enviada']
+        ws_art['G48'] = art['mermas']
+        ws_art['H48'] = art['pct_mermas']
+        ws_art['I48'] = art['revisadas']
+
+        # Clonar checklist
+        chk_name = sanitize_sheet_name(f"CHK {art['articulo']}")
+        ws_chk = copy_sheet_exact(ws_chk_t, wb_out, chk_name)
+        # Rellenar artículo y semana/ciclo en el checklist
+        ws_chk['A1'] = f"ARTÍCULO: {art['articulo']}"
+        ws_chk['D1'] = f"SEMANA: {sem or '?'}   CICLO: {cic or '?'}"
+
+    output = BytesIO()
+    wb_out.save(output)
+    output.seek(0)
+    return output
+
+
+def _render_generate_pdf(sem, cic, articulos):
+    """
+    Genera un PDF con resumen del TOP de mermas:
+    portada + tabla resumen + ficha resumida por artículo.
+    """
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=landscape(A4),
+        leftMargin=1.5*cm, rightMargin=1.5*cm,
+        topMargin=1.5*cm, bottomMargin=1.5*cm,
+    )
+
+    C_DARK  = colors.HexColor("#1F4E78")
+    C_MID   = colors.HexColor("#4A86E8")
+    C_LIGHT = colors.HexColor("#DDEBF7")
+    C_RED   = colors.HexColor("#F4CCCC")
+    C_WHITE = colors.white
+    C_BLACK = colors.HexColor("#1F1F1F")
+    C_GRAY  = colors.HexColor("#E7E6E6")
+
+    styles = getSampleStyleSheet()
+
+    style_title = ParagraphStyle("t", fontSize=18, textColor=C_WHITE,
+                                  fontName="Helvetica-Bold", alignment=TA_CENTER)
+    style_sub   = ParagraphStyle("s", fontSize=10, textColor=C_WHITE,
+                                  fontName="Helvetica", alignment=TA_CENTER)
+    style_sec   = ParagraphStyle("sc", fontSize=11, textColor=C_WHITE,
+                                  fontName="Helvetica-Bold", alignment=TA_LEFT,
+                                  spaceBefore=10, spaceAfter=4)
+
+    def hdr(text):
+        return Paragraph(text, ParagraphStyle("h", fontSize=8, textColor=C_WHITE,
+                                               fontName="Helvetica-Bold", alignment=TA_CENTER, leading=10))
+    def cell(text, align=TA_LEFT):
+        return Paragraph(str(text) if text is not None else '', ParagraphStyle(
+            "c", fontSize=7.5, textColor=C_BLACK, fontName="Helvetica", alignment=align, leading=10))
+
+    def sec_hdr(text):
+        tbl = Table([[Paragraph(text, style_sec)]], colWidths=[doc.width])
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0,0),(-1,-1), C_DARK),
+            ("TOPPADDING", (0,0),(-1,-1), 6), ("BOTTOMPADDING", (0,0),(-1,-1), 6),
+            ("LEFTPADDING", (0,0),(-1,-1), 8),
+        ]))
+        return tbl
+
+    story = []
+
+    # Cabecera
+    hdr_tbl = Table(
+        [[Paragraph(f"TOP MERMAS — SEM {sem or '?'}  CICLO {cic or '?'}", style_title),
+          Paragraph(f"{len(articulos)} artículos", style_sub)]],
+        colWidths=[doc.width*0.75, doc.width*0.25]
+    )
+    hdr_tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0,0),(-1,-1), C_DARK),
+        ("TOPPADDING", (0,0),(-1,-1), 12), ("BOTTOMPADDING", (0,0),(-1,-1), 12),
+        ("LEFTPADDING", (0,0),(-1,-1), 10), ("VALIGN", (0,0),(-1,-1), "MIDDLE"),
+    ]))
+    story.append(hdr_tbl)
+    story.append(Spacer(1, 12))
+
+    # Tabla resumen
+    story.append(sec_hdr("RESUMEN TOP MERMAS"))
+    story.append(Spacer(1, 4))
+
+    col_ws = [3*cm, 3*cm, 5*cm, 2*cm, 2*cm, 2.5*cm, 2*cm, 2*cm, 2.5*cm]
+    hdrs_row = [hdr(h) for h in ["Artículo","Familia","Descripción","Demanda",
+                                   "Repartido","Pte. Repartir","Enviada","Mermas","% Mermas"]]
+    data = [hdrs_row]
+    for i, art in enumerate(articulos):
+        pct = art['pct_mermas']
+        try:    is_bad = float(pct) > 0
+        except: is_bad = False
+        row = [
+            cell(art['articulo']), cell(art['familia']), cell(art['descripcion']),
+            cell(art['demanda'],     TA_CENTER), cell(art['repartido'],    TA_CENTER),
+            cell(art['pte_repartir'],TA_CENTER), cell(art['enviada'],      TA_CENTER),
+            cell(art['mermas'],      TA_CENTER), cell(pct,                 TA_CENTER),
+        ]
+        data.append(row)
+
+    tbl = Table(data, colWidths=col_ws, repeatRows=1)
+    tbl_style = [
+        ("BACKGROUND", (0,0),(-1,0), C_MID),
+        ("GRID",       (0,0),(-1,-1), 0.4, colors.HexColor("#7F7F7F")),
+        ("TOPPADDING", (0,0),(-1,-1), 3), ("BOTTOMPADDING",(0,0),(-1,-1), 3),
+        ("LEFTPADDING",(0,0),(-1,-1), 3), ("VALIGN",        (0,0),(-1,-1), "MIDDLE"),
+    ]
+    for i, art in enumerate(articulos, start=1):
+        pct = art['pct_mermas']
+        try:    is_bad = float(pct) > 0
+        except: is_bad = False
+        fill = C_RED if is_bad else (C_LIGHT if i % 2 == 0 else C_WHITE)
+        tbl_style.append(("BACKGROUND", (0,i),(-1,i), fill))
+    tbl.setStyle(TableStyle(tbl_style))
+    story.append(tbl)
+
+    doc.build(story)
+    buf.seek(0)
+    return buf
+
+
+# ─────────────────────────────────────────────
 #  HELPERS INTERNOS COMPARTIDOS
 # ─────────────────────────────────────────────
 
@@ -790,7 +1112,40 @@ def index():
     return render_template_string(HTML)
 
 
-@app.route('/historico', methods=['POST'])
+@app.route('/generate', methods=['POST'])
+def generar_top():
+    mermas_file = request.files.get('mermas')
+    if not mermas_file or not mermas_file.filename:
+        return "No has subido el fichero MERMAS", 400
+    try:
+        sem, cic, articulos = _parse_mermas_file(mermas_file)
+    except Exception as e:
+        return f"Error al leer el fichero MERMAS: {e}", 400
+    if not articulos:
+        return "No se encontraron artículos en el fichero MERMAS", 400
+    output = _render_generate_excel(sem, cic, articulos)
+    fname = f"TOP_SEM{sem or 'X'}_C{cic or 'X'}.xlsx"
+    return send_file(output, as_attachment=True, download_name=fname,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.route('/generate_pdf', methods=['POST'])
+def generar_top_pdf():
+    mermas_file = request.files.get('mermas')
+    if not mermas_file or not mermas_file.filename:
+        return "No has subido el fichero MERMAS", 400
+    try:
+        sem, cic, articulos = _parse_mermas_file(mermas_file)
+    except Exception as e:
+        return f"Error al leer el fichero MERMAS: {e}", 400
+    if not articulos:
+        return "No se encontraron artículos en el fichero MERMAS", 400
+    output = _render_generate_pdf(sem, cic, articulos)
+    fname = f"TOP_SEM{sem or 'X'}_C{cic or 'X'}.pdf"
+    return send_file(output, as_attachment=True, download_name=fname,
+                     mimetype="application/pdf")
+
+
 def generar_historico():
     uploaded_files = request.files.getlist('files')
     records, order, last_seen_models, last_label = _process_files(uploaded_files)
