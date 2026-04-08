@@ -147,6 +147,43 @@ def convert_pct_cell_to_number(cell):
         pass
 
 
+
+@app.route('/', methods=['GET'])
+def index():
+    return render_template_string(HTML)
+
+
+@app.route('/generate', methods=['POST'])
+def generate():
+    if 'mermas' not in request.files:
+        flash('Falta fichero MERMAS')
+        return redirect(url_for('index'))
+
+    m = request.files['mermas']
+    if not m or m.filename.strip() == '':
+        flash('Falta fichero MERMAS')
+        return redirect(url_for('index'))
+
+    tmpdir = tempfile.mkdtemp()
+    mer_path = os.path.join(tmpdir, 'mermas.xlsx')
+    m.save(mer_path)
+
+    tpl_art = os.path.join(os.path.dirname(__file__), 'PLANTILLA Artículos.xlsx')
+    tpl_chk = os.path.join(os.path.dirname(__file__), 'CHECKLIST CALIDAD DE REPARTO.xlsx')
+
+    if not os.path.exists(tpl_art) or not os.path.exists(tpl_chk):
+        return "Faltan plantillas en la app. Contacta para añadirlas.", 500
+
+    out_path = os.path.join(tmpdir, 'TOP_GENERADO.xlsx')
+
+    try:
+        generate_from_mermas(mer_path, tpl_art, tpl_chk, out_path, m.filename)
+    except Exception as e:
+        return f"Error durante generación: {e}", 500
+
+    return send_file(out_path, as_attachment=True, download_name='TOP_GENERADO.xlsx')
+
+
 def generate_from_mermas(mermas_path, tpl_art_path, tpl_chk_path, out_path, original_filename):
     wb_mermas = load_workbook(mermas_path, data_only=True)
 
