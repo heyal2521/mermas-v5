@@ -381,6 +381,8 @@ def _extract_top_models_and_label(file_storage):
         if mc is None:
             continue
         mc = str(mc).strip()
+        if not re.match(r'^\d+/\d+$', mc):
+            continue
         if not mc:
             continue
         models.add(mc)
